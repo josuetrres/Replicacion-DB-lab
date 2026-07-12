@@ -1,0 +1,164 @@
+# =============================================================
+#  lab_replica — Docker Compose (PostgreSQL only)
+#
+#  Topology:
+#    PostgreSQL  : pg-master, pg-replica1, pg-replica2
+#    API         : FastAPI on port 8000
+#    Frontend    : Nginx on port 8080
+#
+#  All containers share the `lab_net` bridge network and can
+#  resolve each other by service name.
+# =============================================================
+
+services:
+
+  # ───────────────────────────────────────────────────────────
+  #  PostgreSQL — Master
+  # ───────────────────────────────────────────────────────────
+  pg-master:
+    image: postgres:16
+    container_name: pg-master
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB:       ${POSTGRES_DB}
+      POSTGRES_USER:     ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pg_master_data:/var/lib/postgresql/data
+      - ./postgres/master/postgresql.conf:/etc/postgresql/postgresql.conf:ro
+      - ./postgres/master/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
+      - ./postgres/master/init:/docker-entrypoint-initdb.d:ro
+    command: >
+      postgres
+        -c config_file=/etc/postgresql/postgresql.conf
+        -c hba_file=/etc/postgresql/pg_hba.conf
+    ports:
+      - "5432:5432"
+    networks:
+      - lab_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  # ───────────────────────────────────────────────────────────
+  #  PostgreSQL — Replica 1
+  # ───────────────────────────────────────────────────────────
+  pg-replica1:
+    image: postgres:16
+    container_name: pg-replica1
+    restart: unless-stopped
+    depends_on:
+      pg-master:
+        condition: service_healthy
+    environment:
+      POSTGRES_USER:     ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      PGPASSWORD:        ${PG_REPL_PASSWORD}
+      PG_MASTER_HOST:    pg-master
+      PG_REPL_USER:      ${PG_REPL_USER}
+      PG_REPLICA_SLOT:   replica1_slot
+    volumes:
+      - pg_replica1_data:/var/lib/postgresql/data
+      - ./postgres/replica/entrypoint.sh:/entrypoint.sh:ro
+    entrypoint: ["/bin/bash", "/entrypoint.sh"]
+    ports:
+      - "5433:5432"
+    networks:
+      - lab_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # ───────────────────────────────────────────────────────────
+  #  PostgreSQL — Replica 2
+  # ───────────────────────────────────────────────────────────
+  pg-replica2:
+    image: postgres:16
+    container_name: pg-replica2
+    restart: unless-stopped
+    depends_on:
+      pg-master:
+        condition: service_healthy
+    environment:
+      POSTGRES_USER:     ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      PGPASSWORD:        ${PG_REPL_PASSWORD}
+      PG_MASTER_HOST:    pg-master
+      PG_REPL_USER:      ${PG_REPL_USER}
+      PG_REPLICA_SLOT:   replica2_slot
+    volumes:
+      - pg_replica2_data:/var/lib/postgresql/data
+      - ./postgres/replica/entrypoint.sh:/entrypoint.sh:ro
+    entrypoint: ["/bin/bash", "/entrypoint.sh"]
+    ports:
+      - "5434:5432"
+    networks:
+      - lab_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # ───────────────────────────────────────────────────────────
+  #  FastAPI REST API
+  # ───────────────────────────────────────────────────────────
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    container_name: lab-api
+    restart: unless-stopped
+    depends_on:
+      pg-master:
+        condition: service_healthy
+    environment:
+      PG_MASTER_HOST:    pg-master
+      PG_REPLICA1_HOST:  pg-replica1
+      PG_REPLICA2_HOST:  pg-replica2
+      PG_PORT:           "5432"
+      POSTGRES_DB:       ${POSTGRES_DB}
+      POSTGRES_USER:     ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    ports:
+      - "${API_PORT:-8000}:8000"
+    networks:
+      - lab_net
+
+  # ───────────────────────────────────────────────────────────
+  #  Frontend — Static Dashboard (Nginx)
+  # ───────────────────────────────────────────────────────────
+  frontend:
+    image: nginx:alpine
+    container_name: lab-frontend
+    restart: unless-stopped
+    volumes:
+      - ./frontend:/usr/share/nginx/html:ro
+    ports:
+      - "8080:80"
+    networks:
+      - lab_net
+
+# ─────────────────────────────────────────────────────────────
+#  Named Volumes
+# ─────────────────────────────────────────────────────────────
+volumes:
+  pg_master_data:
+  pg_replica1_data:
+  pg_replica2_data:
+
+# ─────────────────────────────────────────────────────────────
+#  Network
+# ─────────────────────────────────────────────────────────────
+networks:
+  lab_net:
+    driver: bridge

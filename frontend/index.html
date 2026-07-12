@@ -1,0 +1,544 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>lab_replica — Panel de Replicación WAL en PostgreSQL</title>
+  <meta name="description" content="Panel interactivo para probar la replicación física WAL en PostgreSQL y simular escenarios de failover." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- ══════════════════════════════════════════════════ HEADER -->
+  <header class="app-header">
+    <div class="header-inner">
+      <div class="header-brand">
+        <div class="brand-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0018 0V5"/><path d="M3 12a9 3 0 0018 0"/></svg>
+        </div>
+        <div>
+          <h1 class="brand-title">lab_replica</h1>
+          <p class="brand-subtitle">Panel de Replicación Física WAL de PostgreSQL</p>
+        </div>
+      </div>
+      <div class="header-status">
+        <div class="api-badge" id="api-badge">
+          <span class="status-dot" id="api-dot"></span>
+          <span id="api-status-text">Conectando…</span>
+        </div>
+        <div class="api-url-display">API: <span id="api-url-display">http://localhost:8000</span></div>
+        <button class="btn btn-ghost btn-sm" id="btn-settings" title="Configurar URL de API">⚙ Ajustes</button>
+      </div>
+    </div>
+  </header>
+
+  <!-- ══════════════════════════════════════════════════ SETTINGS MODAL -->
+  <div class="modal-overlay" id="settings-modal" hidden>
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3>⚙ Ajustes</h3>
+        <button class="btn-close" id="close-settings">✕</button>
+      </div>
+      <div class="modal-body">
+        <label class="form-label">URL Base de la API</label>
+        <input class="form-input" type="text" id="api-url-input" value="http://localhost:8000" placeholder="http://localhost:8000" />
+        <p class="form-hint">Cambia esto si tu API se está ejecutando en un host o puerto diferente.</p>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-primary" id="save-settings">Guardar y Reconectar</button>
+        <button class="btn btn-ghost" id="cancel-settings">Cancelar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════ MAIN NAV -->
+  <nav class="main-nav" role="tablist">
+    <button class="nav-tab active" data-tab="dashboard" role="tab">
+      <span class="tab-icon">🖥</span> Tablero
+    </button>
+    <button class="nav-tab" data-tab="operations" role="tab">
+      <span class="tab-icon">✍</span> Operaciones
+    </button>
+    <button class="nav-tab" data-tab="monitor" role="tab">
+      <span class="tab-icon">📊</span> Monitor
+    </button>
+    <button class="nav-tab tab-pg" data-tab="pg-failover" role="tab">
+      <span class="tab-icon">🐘</span> Asistente de Failover
+    </button>
+    <button class="nav-tab tab-demo" data-tab="consistency" role="tab">
+      <span class="tab-icon">⚡</span> Demo de Consistencia
+    </button>
+  </nav>
+
+  <!-- ══════════════════════════════════════════════════ TAB PANELS -->
+  <main class="main-content">
+
+    <!-- ─────────────────────────────────── TAB: DASHBOARD -->
+    <section class="tab-panel active" id="tab-dashboard">
+      <div class="section-header">
+        <h2>Visión General del Sistema</h2>
+        <div class="header-actions">
+          <span class="auto-refresh-label">Autorefresco</span>
+          <label class="toggle-switch">
+            <input type="checkbox" id="auto-refresh-toggle" checked />
+            <span class="toggle-slider"></span>
+          </label>
+          <button class="btn btn-ghost btn-sm" id="btn-refresh-all">↺ Refrescar</button>
+        </div>
+      </div>
+
+      <!-- Architecture diagram -->
+      <div class="arch-diagram">
+        <div class="arch-cluster">
+          <div class="arch-cluster-label pg-label">PostgreSQL — Replicación Física WAL</div>
+          <div class="arch-nodes">
+            <div class="arch-node master-node" id="arch-pg-master">
+              <div class="node-icon">🐘</div>
+              <div class="node-name">pg-master</div>
+              <div class="node-port">:5432</div>
+              <div class="node-badge master-badge">MASTER</div>
+              <div class="node-status-dot" id="dot-pg-master"></div>
+            </div>
+            <div class="arch-arrows">
+              <div class="arch-arrow">
+                <div class="arrow-label">Flujo WAL</div>
+                <div class="arrow-line"></div>
+                <div class="arrow-tip">▶</div>
+              </div>
+              <div class="arch-arrow">
+                <div class="arrow-label">Flujo WAL</div>
+                <div class="arrow-line"></div>
+                <div class="arrow-tip">▶</div>
+              </div>
+            </div>
+            <div class="arch-replicas">
+              <div class="arch-node replica-node" id="arch-pg-replica1">
+                <div class="node-icon">🐘</div>
+                <div class="node-name">pg-replica1</div>
+                <div class="node-port">:5433</div>
+                <div class="node-badge replica-badge">RÉPLICA 1</div>
+                <div class="node-status-dot" id="dot-pg-replica1"></div>
+              </div>
+              <div class="arch-node replica-node" id="arch-pg-replica2">
+                <div class="node-icon">🐘</div>
+                <div class="node-name">pg-replica2</div>
+                <div class="node-port">:5434</div>
+                <div class="node-badge replica-badge">RÉPLICA 2</div>
+                <div class="node-status-dot" id="dot-pg-replica2"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Node status cards -->
+      <div class="cards-grid" id="node-cards"></div>
+
+      <!-- Raw health response -->
+      <div class="response-block" id="health-response-block" hidden>
+        <div class="response-header">
+          <span>Respuesta /health bruta (pruebas en vivo)</span>
+          <button class="btn-copy" data-target="health-raw">Copiar</button>
+        </div>
+        <pre class="response-pre" id="health-raw"></pre>
+      </div>
+    </section>
+
+    <!-- ─────────────────────────────────── TAB: OPERATIONS -->
+    <section class="tab-panel" id="tab-operations">
+      <div class="section-header">
+        <h2>Operaciones de Base de Datos</h2>
+        <p class="section-desc">Prueba leer o escribir a los nodos de PostgreSQL y verifica sus estados de recuperación.</p>
+      </div>
+
+      <div class="ops-grid">
+
+        <!-- PG Write -->
+        <div class="op-card pg-card">
+          <div class="op-card-header">
+            <span class="op-icon">🐘</span>
+            <div>
+              <h3>Escribir en Nodo</h3>
+              <p class="op-desc">Inserta un estudiante en el nodo seleccionado.</p>
+            </div>
+          </div>
+          <div class="op-card-body">
+            <div class="form-row">
+              <label class="form-label">Escribir a</label>
+              <div class="segmented-control">
+                <button class="seg-btn active" data-group="pg-write" data-val="master">master</button>
+                <button class="seg-btn" data-group="pg-write" data-val="replica1">replica1</button>
+                <button class="seg-btn" data-group="pg-write" data-val="replica2">replica2</button>
+              </div>
+            </div>
+            <div class="form-row">
+              <label class="form-label">Nombre</label>
+              <input class="form-input" id="pg-name" type="text" placeholder="Ej: Alicia Reyes" />
+            </div>
+            <div class="form-row">
+              <label class="form-label">Correo</label>
+              <input class="form-input" id="pg-email" type="email" placeholder="Ej: alicia@uni.edu" />
+            </div>
+            <div class="form-row">
+              <label class="form-label">Curso</label>
+              <input class="form-input" id="pg-course" type="text" value="Sistemas Distribuidos" />
+            </div>
+            <button class="btn btn-pg btn-full" id="btn-pg-write">
+              <span class="btn-icon">↑</span> Ejecutar Escritura
+            </button>
+          </div>
+          <div class="op-response" id="pg-write-response" hidden></div>
+        </div>
+
+        <!-- PG Read -->
+        <div class="op-card pg-card">
+          <div class="op-card-header">
+            <span class="op-icon">🐘</span>
+            <div>
+              <h3>Leer de Nodo</h3>
+              <p class="op-desc">Lee estudiantes del nodo seleccionado</p>
+            </div>
+          </div>
+          <div class="op-card-body">
+            <div class="form-row">
+              <label class="form-label">Leer de</label>
+              <div class="segmented-control">
+                <button class="seg-btn" data-group="pg-read" data-val="master">master</button>
+                <button class="seg-btn active" data-group="pg-read" data-val="replica1">replica1</button>
+                <button class="seg-btn" data-group="pg-read" data-val="replica2">replica2</button>
+              </div>
+            </div>
+            <div class="info-box">
+              <span class="info-icon">ℹ</span>
+              Leer de una réplica demuestra <strong>escalado de lectura</strong> y consistencia eventual tras la propagación WAL.
+            </div>
+            <button class="btn btn-pg btn-full" id="btn-pg-read">
+              <span class="btn-icon">↓</span> Ejecutar Lectura
+            </button>
+          </div>
+          <div class="op-response" id="pg-read-response" hidden></div>
+        </div>
+
+        <!-- PG Recovery Status -->
+        <div class="op-card pg-card" style="grid-column: 1 / -1;">
+          <div class="op-card-header">
+            <span class="op-icon">🩺</span>
+            <div>
+              <h3>Estado de Recuperación (Recovery Status)</h3>
+              <p class="op-desc">Consulta <code>pg_is_in_recovery()</code> para saber si un nodo es primario o réplica.</p>
+            </div>
+          </div>
+          <div class="op-card-body">
+            <div class="form-row">
+              <label class="form-label">Consultar Nodo</label>
+              <div class="segmented-control">
+                <button class="seg-btn active" data-group="pg-recovery" data-val="master">master</button>
+                <button class="seg-btn" data-group="pg-recovery" data-val="replica1">replica1</button>
+                <button class="seg-btn" data-group="pg-recovery" data-val="replica2">replica2</button>
+              </div>
+            </div>
+            <button class="btn btn-pg btn-full" id="btn-pg-recovery">
+              <span class="btn-icon">🔍</span> Consultar Estado
+            </button>
+          </div>
+          <div class="op-response" id="pg-recovery-response" hidden></div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- ─────────────────────────────────── TAB: MONITOR -->
+    <section class="tab-panel" id="tab-monitor">
+      <div class="section-header">
+        <h2>Monitor de Replicación</h2>
+        <button class="btn btn-ghost btn-sm" id="btn-refresh-monitor">↺ Refrescar Todo</button>
+      </div>
+
+      <div class="monitor-grid">
+
+        <div class="monitor-card pg-card">
+          <div class="monitor-card-header">
+            <span>🐘 pg_stat_replication (pg-master)</span>
+            <button class="btn btn-ghost btn-xs" data-action="fetch-pg-status">Cargar</button>
+          </div>
+          <div class="monitor-body" id="pg-stat-replication">
+            <div class="empty-state">Clic en Cargar para ver el estado de replicación</div>
+          </div>
+        </div>
+
+        <div class="monitor-card pg-card">
+          <div class="monitor-card-header">
+            <span>🐘 pg_stat_wal_receiver (pg-replica1)</span>
+            <button class="btn btn-ghost btn-xs" data-action="fetch-pg-replica1-status">Cargar</button>
+          </div>
+          <div class="monitor-body" id="pg-wal-receiver-1">
+            <div class="empty-state">Clic en Cargar para ver estado del WAL receiver</div>
+          </div>
+        </div>
+
+        <div class="monitor-card pg-card">
+          <div class="monitor-card-header">
+            <span>🐘 pg_stat_wal_receiver (pg-replica2)</span>
+            <button class="btn btn-ghost btn-xs" data-action="fetch-pg-replica2-status">Cargar</button>
+          </div>
+          <div class="monitor-body" id="pg-wal-receiver-2">
+            <div class="empty-state">Clic en Cargar para ver estado del WAL receiver</div>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- ─────────────────────────────────── TAB: PG FAILOVER -->
+    <section class="tab-panel" id="tab-pg-failover">
+      <div class="section-header">
+        <h2>🐘 Asistente de Failover PostgreSQL</h2>
+        <p class="section-desc">Guía paso a paso para simular una falla en el master y promover una réplica.</p>
+      </div>
+
+      <div class="failover-warning">
+        <div class="warning-icon">⚠</div>
+        <div>
+          <strong>Antes de comenzar:</strong> Asegúrate de que el stack esté corriendo y que en el Tablero todos los nodos aparezcan como <span class="badge-connected">conectados</span>.
+        </div>
+      </div>
+
+      <!-- Progress -->
+      <div class="wizard-progress">
+        <div class="wizard-progress-label">Progreso del Failover</div>
+        <div class="wizard-progress-bar">
+          <div class="wizard-progress-fill pg-progress" id="pg-progress-fill" style="width:0%"></div>
+        </div>
+        <div class="wizard-steps-dots">
+          <div class="step-dot active" data-step="0">1</div>
+          <div class="step-dot" data-step="1">2</div>
+          <div class="step-dot" data-step="2">3</div>
+          <div class="step-dot" data-step="3">4</div>
+        </div>
+      </div>
+
+      <div class="wizard-steps" id="pg-wizard">
+
+        <!-- STEP 1 -->
+        <div class="wizard-step active" data-step="0">
+          <div class="step-header pg-step-header">
+            <div class="step-number">Paso 1</div>
+            <h3>Verificar que la Replicación está Sana</h3>
+          </div>
+          <div class="step-body">
+            <p class="step-desc">Confirma que ambas réplicas están recibiendo el flujo WAL del master. La API consultará <code>pg_stat_replication</code>.</p>
+            <div class="step-actions">
+              <button class="btn btn-pg" id="pg-step1-api">🔍 Comprobar vía API</button>
+            </div>
+            <div class="step-response" id="pg-step1-response" hidden></div>
+            <div class="step-expected">
+              <span class="expected-label">Se espera:</span> Dos filas con <code>state = streaming</code>
+            </div>
+          </div>
+          <div class="step-footer">
+            <button class="btn btn-pg step-next-btn" data-wizard="pg">Marcar como Hecho y Continuar →</button>
+          </div>
+        </div>
+
+        <!-- STEP 2 -->
+        <div class="wizard-step" data-step="1">
+          <div class="step-header pg-step-header">
+            <div class="step-number">Paso 2</div>
+            <h3>Simular la Caída del Master</h3>
+          </div>
+          <div class="step-body">
+            <div class="danger-box">
+              <span class="danger-icon">💀</span>
+              <strong>Acción destructiva:</strong> Esto detiene el contenedor <code>pg-master</code> vía la API de Docker. Las escrituras fallarán hasta promover una réplica.
+            </div>
+            <div class="step-actions" style="margin-top: 10px;">
+              <button class="btn btn-danger" id="pg-step2-stop">🛑 Detener contenedor pg-master</button>
+            </div>
+            <div class="step-response" id="pg-step2-stop-response" hidden></div>
+            <p class="step-desc">Verifica que las réplicas sigan corriendo pero en modo lectura (recovery):</p>
+            <div class="step-actions">
+              <button class="btn btn-pg" id="pg-step2-check">🔍 Revisar Recovery Status vía API</button>
+            </div>
+            <div class="step-expected">
+              <span class="expected-label">Se espera:</span> <code>in_recovery = true</code> (sigue siendo standby)
+            </div>
+            <div class="step-response" id="pg-step2-check-response" hidden></div>
+          </div>
+          <div class="step-footer">
+            <button class="btn btn-ghost step-prev-btn" data-wizard="pg">← Atrás</button>
+            <button class="btn btn-pg step-next-btn" data-wizard="pg">Marcar como Hecho y Continuar →</button>
+          </div>
+        </div>
+
+        <!-- STEP 3 -->
+        <div class="wizard-step" data-step="2">
+          <div class="step-header pg-step-header">
+            <div class="step-number">Paso 3</div>
+            <h3>Promover la Réplica 1 a Nuevo Master</h3>
+          </div>
+          <div class="step-body">
+            <p class="step-desc">Promueve <code>pg-replica1</code> a primario mediante la API. Esto sale del modo de recuperación, habilitando lectura y escritura, y finalizando el streaming del WAL antiguo.</p>
+            <div class="step-actions">
+              <button class="btn btn-success" id="pg-step3-promote">🚀 Promover pg-replica1 vía API</button>
+            </div>
+            <div class="step-response" id="pg-step3-promote-response" hidden></div>
+            <div class="step-expected" style="margin-top: 10px;">
+              <span class="expected-label">Se espera:</span> Nodo promovido exitosamente.
+            </div>
+            <p class="step-desc">Prueba hacer una escritura para confirmar que permite escribir:</p>
+            <div class="step-actions">
+              <button class="btn btn-pg" id="pg-step3-verify">✍️ Escribir en pg-replica1 vía API</button>
+            </div>
+            <div class="step-response" id="pg-step3-response" hidden></div>
+          </div>
+          <div class="step-footer">
+            <button class="btn btn-ghost step-prev-btn" data-wizard="pg">← Atrás</button>
+            <button class="btn btn-pg step-next-btn" data-wizard="pg">Marcar como Hecho y Continuar →</button>
+          </div>
+        </div>
+
+        <!-- STEP 4 -->
+        <div class="wizard-step" data-step="3">
+          <div class="step-header pg-step-header">
+            <div class="step-number">Paso 4</div>
+            <h3>Observar Réplica 2 — Estado Huérfano</h3>
+          </div>
+          <div class="step-body">
+            <div class="warning-box">
+              <span class="warning-icon">⚠</span>
+              <strong>La Réplica 2 ha quedado huérfana.</strong> Sigue configurada para recibir WAL de <code>pg-master</code> (detenido) y no puede unirse automáticamente a <code>pg-replica1</code>.
+            </div>
+            <p class="step-desc">Observa el error del WAL receiver en la Réplica 2:</p>
+            <div class="step-actions">
+              <button class="btn btn-pg" id="pg-step4-check">🔍 Revisar WAL Receiver de Réplica 2</button>
+            </div>
+            <div class="step-response" id="pg-step4-response" hidden></div>
+            <p class="step-desc">Para reconectar la Réplica 2 al nuevo master, debes limpiar sus datos y volverla a levantar:</p>
+            <div class="cmd-block">
+              <pre id="cmd-pg-step4b">docker compose stop pg-replica2
+docker run --rm -v lab_replica_pg_replica2_data:/data alpine sh -c "rm -rf /data/*"
+# Editar docker-compose.yml: poner PG_MASTER_HOST: pg-replica1 para pg-replica2
+docker compose up -d pg-replica2</pre>
+              <button class="btn-copy" data-target="cmd-pg-step4b">Copiar</button>
+            </div>
+
+            <div class="concept-box">
+              <h4>📚 Concepto Clave</h4>
+              <p>En entornos de producción, herramientas como <strong>Patroni</strong>, <strong>repmgr</strong>, o <strong>pg_auto_failover</strong> automatizan todo este proceso, incluyendo reconexión de réplicas huérfanas, elecciones de primario y cambios de DNS/IP.</p>
+            </div>
+
+            <div class="reset-section">
+              <h4>🔄 Restaurar el Laboratorio</h4>
+              <div class="cmd-block">
+                <pre id="cmd-pg-reset">docker compose down -v
+docker compose up -d --build</pre>
+                <button class="btn-copy" data-target="cmd-pg-reset">Copiar</button>
+              </div>
+            </div>
+          </div>
+          <div class="step-footer">
+            <button class="btn btn-ghost step-prev-btn" data-wizard="pg">← Atrás</button>
+            <button class="btn btn-success" id="pg-complete-btn">✅ Failover Completado</button>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Summary table -->
+      <div class="summary-table-wrapper">
+        <h3>Resumen del Failover en PostgreSQL</h3>
+        <table class="summary-table">
+          <thead><tr><th>Paso</th><th>Acción</th><th>Resultado</th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td>API: <code>/pg/status</code></td><td>Ambas réplicas streaming WAL</td></tr>
+            <tr><td>2</td><td>API: Detener pg-master</td><td>Master caído, réplicas en solo-lectura</td></tr>
+            <tr><td>3</td><td>API: Promover pg-replica1</td><td>Réplica 1 pasa a ser el nuevo primario</td></tr>
+            <tr><td>4</td><td>Observar pg-replica2</td><td>⚠ Huérfana — no se reconecta automáticamente</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ─────────────────────────────────── TAB: CONSISTENCY DEMO -->
+    <section class="tab-panel" id="tab-consistency">
+      <div class="section-header">
+        <h2>⚡ Demo de Consistencia Eventual</h2>
+        <p class="section-desc">Escribe al master y lee de inmediato de una réplica para observar la propagación del WAL.</p>
+      </div>
+
+      <div class="demo-card">
+        <div class="demo-how-it-works">
+          <h3>Cómo Funciona</h3>
+          <ol class="how-list">
+            <li><span class="how-num">1</span> Un registro es <strong>escrito en pg-master</strong>.</li>
+            <li><span class="how-num">2</span> La API espera <strong>50 ms</strong> para permitir la propagación WAL.</li>
+            <li><span class="how-num">3</span> La API lee los 5 registros más recientes de <strong>pg-replica1</strong>.</li>
+            <li><span class="how-num">4</span> Verás si el nuevo registro ya aparece en la réplica, demostrando <strong>consistencia eventual</strong>.</li>
+          </ol>
+        </div>
+
+        <div class="demo-form">
+          <div class="form-row">
+            <label class="form-label">Nombre del Estudiante</label>
+            <input class="form-input" id="demo-name" type="text" value="Estudiante de Prueba" />
+          </div>
+          <div class="form-row">
+            <label class="form-label">Correo (debe ser único)</label>
+            <input class="form-input" id="demo-email" type="email" placeholder="prueba@uni.edu" />
+          </div>
+          <button class="btn btn-demo btn-full btn-lg" id="btn-run-demo">
+            <span class="btn-icon">⚡</span> Ejecutar Demo de Consistencia
+          </button>
+        </div>
+      </div>
+
+      <div class="demo-results" id="demo-results" hidden>
+        <div class="results-grid">
+
+          <div class="result-panel pg-result">
+            <div class="result-header">
+              <span class="result-icon">🐘</span>
+              <div>
+                <div class="result-title">Escribir → pg-master</div>
+                <div class="result-subtitle" id="pg-write-status">—</div>
+              </div>
+              <div class="result-badge" id="pg-write-badge">—</div>
+            </div>
+            <pre class="result-pre" id="pg-write-result">—</pre>
+          </div>
+
+          <div class="result-panel pg-result">
+            <div class="result-header">
+              <span class="result-icon">🐘</span>
+              <div>
+                <div class="result-title">Leer ← pg-replica1 (tras 50ms)</div>
+                <div class="result-subtitle" id="pg-read-status">—</div>
+              </div>
+              <div class="result-badge" id="pg-read-badge">—</div>
+            </div>
+            <pre class="result-pre" id="pg-read-result">—</pre>
+          </div>
+
+        </div>
+
+        <div class="consistency-verdict" id="consistency-verdict" hidden>
+          <div class="verdict-icon" id="verdict-icon">—</div>
+          <div>
+            <div class="verdict-title" id="verdict-title">—</div>
+            <div class="verdict-desc" id="verdict-desc">—</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- ══════════════════════════════════════════════════ TOAST -->
+  <div class="toast-container" id="toast-container"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,27 @@
+# Ambientes Virtuales de Python
+venv/
+
+.venv/
+.env/
+
+# Caché de Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+
+
+# IDEs y Editores
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Logs
+*.log
+
+# Carpetas de datos locales (si alguna vez se usan volúmenes bind mount en lugar de named volumes)
+data/
+pg_data/
